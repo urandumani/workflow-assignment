@@ -19,6 +19,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -32,11 +33,14 @@ public class WorkflowService {
     private final WorkflowRepository workflowRepository;
     private final WorkflowMapper workflowMapper;
     private final WorkflowContentMapper workflowContentMapper;
+    private final Map<NodeType, NodeExecutor> nodeExecutors;
 
-    public WorkflowService(WorkflowRepository workflowRepository, WorkflowMapper workflowMapper, UserRepository userRepository, WorkflowContentMapper workflowContentMapper) {
+    public WorkflowService(WorkflowRepository workflowRepository, WorkflowMapper workflowMapper, WorkflowContentMapper workflowContentMapper, List<NodeExecutor> nodeExecutors) {
         this.workflowRepository = workflowRepository;
         this.workflowMapper = workflowMapper;
         this.workflowContentMapper = workflowContentMapper;
+        this.nodeExecutors = nodeExecutors.stream()
+                .collect(Collectors.toMap(NodeExecutor::getType, e -> e));
     }
 
     public List<WorkflowDTO> findAll() {
@@ -89,28 +93,12 @@ public class WorkflowService {
             if (node.getStatus() == NodeStatus.COMPLETED) continue;
             node.setStatus(NodeStatus.IN_PROGRESS);
             log.info("Node with id {} is in progress", node.getId());
-            switch (node.getType()) {
-                case INIT -> {
-                    node.setStatus(NodeStatus.COMPLETED);
-                    continue;
-                }
-                case CONDITION -> {
-                    if (!"John".equals(trigger.getUsername())) {
-                        node.setStatus(NodeStatus.REJECTED);
-                        log.info("Node with id {} has been rejected", node.getId());
-                        return workflow;
-                    }
-                }
-                case MODIFY_MESSAGE -> {
-                    String updatedMessage = "Hello " + (trigger.getMessage() != null ? trigger.getMessage() : "");
-                    trigger.setMessage(updatedMessage);
-                }
-                case STORE_MESSAGE -> {
-                    // log the message since its not defined how to store it
-                    log.info("Storing message for {}: {}", trigger.getUsername(), trigger.getMessage());
-                }
-            }
-            node.setStatus(NodeStatus.COMPLETED);
+
+            NodeExecutor executor = nodeExecutors.get(node.getType());
+            executor.execute(node, trigger, workflow);
+
+            if (node.getStatus() != NodeStatus.COMPLETED) break;
+
             log.info("Node with id {} has been completed", node.getId());
         }
 
